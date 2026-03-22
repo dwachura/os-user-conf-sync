@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "os-user-conf-sync"
+version = "0.1.0"
+description = "Sync selected user config files through a git repository"
+readme = "README.md"
+requires-python = ">=3.9"
+authors = [{ name = "Dawid Wachura" }]
+license = { text = "Proprietary" }
+classifiers = [
+  "Environment :: Console",
+  "Intended Audience :: System Administrators",
+  "License :: Other/Proprietary License",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Topic :: System :: Systems Administration",
+]
+
+[project.scripts]
+os-user-conf-sync = "os_user_conf_sync.app:main"
+
+[tool.setuptools]
+include-package-data = false
+
+[tool.setuptools.packages.find]
+include = ["os_user_conf_sync*"]
