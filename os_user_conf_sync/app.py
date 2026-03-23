@@ -298,6 +298,10 @@ def load_manifest() -> dict[str, Any]:
         return empty_manifest()
 
     data = json.loads(manifest_path.read_text())
+    return normalize_manifest_data(data)
+
+
+def normalize_manifest_data(data: dict[str, Any]) -> dict[str, Any]:
     version = int(data.get("version", 1))
     if version == 1:
         files = {
@@ -329,6 +333,16 @@ def load_manifest() -> dict[str, Any]:
         "directories": dict(sorted(directories.items())),
         "files": dict(sorted(files.items())),
     }
+
+
+def load_manifest_at_ref(ref: str | None) -> dict[str, Any]:
+    if not ref:
+        return empty_manifest()
+    object_ref = f"{ref}:{MANIFEST_NAME}"
+    if git_rev_parse(object_ref) is None:
+        return empty_manifest()
+    result = git(["show", object_ref])
+    return normalize_manifest_data(json.loads(result.stdout))
 
 
 def write_manifest(manifest: dict[str, Any]) -> None:
@@ -380,6 +394,10 @@ def git_rev_parse(ref: str) -> str | None:
 def fetch_remote() -> str | None:
     git(["fetch", "origin"])
     return git_rev_parse(f"refs/remotes/origin/{current_branch()}")
+
+
+def remote_tracking_head(branch: str) -> str | None:
+    return git_rev_parse(f"refs/remotes/origin/{branch}")
 
 
 def sync_clone_with_remote() -> str | None:
@@ -648,34 +666,152 @@ def root_statuses(entry: dict[str, str], state: dict[str, Any], manifest: dict[s
 
 
 def blockers_for_pull(manifest: dict[str, Any], state: dict[str, Any]) -> list[str]:
-    blocked: list[str] = []
+    return [format_status_item(item) for item in pull_blocker_items(manifest, state)]
+
+
+def status_item(status: str, token: str, path: Path, *, kind: str, action: str | None = None) -> dict[str, Any]:
+    item = {
+        "kind": kind,
+        "status": status,
+        "token": token,
+        "path": str(path),
+    }
+    if action is not None:
+        item["action"] = action
+    return item
+
+
+def format_status_item(item: dict[str, Any]) -> str:
+    action = item.get("action")
+    status = str(item["status"]).replace("_", " ")
+    if action:
+        return f"pending {action} {item['kind']}: {item['path']}"
+    if status == "no longer managed":
+        return f"no longer managed remotely: {item['path']}"
+    if status in {"modified", "missing", "unsupported"}:
+        return f"{status} {item['kind']}: {item['path']}"
+    return f"{status}: {item['path']}"
+
+
+def pull_blocker_items(manifest: dict[str, Any], state: dict[str, Any]) -> list[dict[str, Any]]:
     last_synced_directories = set(state["last_synced_directories"])
     last_synced_hashes = state["last_synced_hashes"]
+    items: list[dict[str, Any]] = []
 
     for token in sorted(manifest["directories"]):
         local_path = token_to_local_path(token)
         if token in last_synced_directories:
             if local_path.exists() and not local_path.is_dir():
-                blocked.append(f"path collision: {local_path}")
+                items.append(status_item("path_collision", token, local_path, kind="dir"))
         elif local_path.exists():
-            blocked.append(f"new remote directory collides locally: {local_path}")
+            items.append(status_item("new_remote_directory_collides_locally", token, local_path, kind="dir"))
 
     for token in sorted(manifest["files"]):
         local_path = token_to_local_path(token)
         synced_hash = last_synced_hashes.get(token)
         if synced_hash is None:
             if local_path.exists():
-                blocked.append(f"new remote file collides locally: {local_path}")
+                items.append(status_item("new_remote_file_collides_locally", token, local_path, kind="file"))
             continue
         if not local_path.exists():
-            blocked.append(f"missing: {local_path}")
+            items.append(status_item("missing", token, local_path, kind="file"))
             continue
         if local_path.is_symlink() or not local_path.is_file():
-            blocked.append(f"unsupported: {local_path}")
+            items.append(status_item("unsupported", token, local_path, kind="file"))
             continue
         if hash_file(local_path) != synced_hash:
-            blocked.append(f"modified: {local_path}")
-    return blocked
+            items.append(status_item("modified", token, local_path, kind="file"))
+    return items
+
+
+def remote_diff_items(manifest: dict[str, Any]) -> list[dict[str, Any]]:
+    differences: list[dict[str, Any]] = []
+
+    for token in sorted(manifest["directories"]):
+        local_path = token_to_local_path(token)
+        if not local_path.exists():
+            differences.append(status_item("missing", token, local_path, kind="dir"))
+            continue
+        if not local_path.is_dir():
+            differences.append(status_item("path_collision", token, local_path, kind="dir"))
+
+    for token in sorted(manifest["files"]):
+        local_path = token_to_local_path(token)
+        if not local_path.exists():
+            differences.append(status_item("missing", token, local_path, kind="file"))
+            continue
+        if local_path.is_symlink() or not local_path.is_file():
+            differences.append(status_item("unsupported", token, local_path, kind="file"))
+            continue
+        if hash_file(local_path) != manifest["files"][token]["sha256"]:
+            differences.append(status_item("modified", token, local_path, kind="file"))
+
+    return differences
+
+
+def stale_local_path_items(manifest: dict[str, Any], state: dict[str, Any]) -> list[dict[str, Any]]:
+    paths: list[dict[str, Any]] = []
+    current_files = set(manifest["files"])
+    current_directories = set(manifest["directories"])
+    for token in sorted(set(state["last_synced_hashes"]) - current_files):
+        local_path = token_to_local_path(token)
+        if local_path.exists():
+            paths.append(status_item("no_longer_managed", token, local_path, kind="file"))
+    for token in sorted(set(state["last_synced_directories"]) - current_directories):
+        local_path = token_to_local_path(token)
+        if local_path.exists():
+            paths.append(status_item("no_longer_managed", token, local_path, kind="dir"))
+    return paths
+
+
+def print_status_section(title: str, items: list[dict[str, Any]] | list[str]) -> None:
+    if not items:
+        return
+    print(f"{title}:")
+    for line in items:
+        if isinstance(line, dict):
+            line = format_status_item(line)
+        print(f"  - {line}")
+
+
+def collect_status(state: dict[str, Any], *, offline: bool = False) -> dict[str, Any]:
+    branch = current_branch()
+    remote_head = remote_tracking_head(branch) if offline else fetch_remote()
+    remote_manifest = load_manifest_at_ref(f"refs/remotes/origin/{branch}" if remote_head else None)
+
+    pending: list[dict[str, Any]] = []
+    for entry in state["pending_adds"]:
+        pending.append(status_item("pending", entry["path"], token_to_local_path(entry["path"]), kind=entry["kind"], action="add"))
+    for entry in state["pending_removes"]:
+        pending.append(status_item("pending", entry["path"], token_to_local_path(entry["path"]), kind=entry["kind"], action="remove"))
+
+    remote_state = "changed"
+    if remote_head != state["last_sync_commit"]:
+        remote_state = "changed"
+    elif remote_head:
+        remote_state = "in_sync"
+    else:
+        remote_state = "empty"
+
+    differences = remote_diff_items(remote_manifest)
+    blockers = pull_blocker_items(remote_manifest, state)
+    stale = stale_local_path_items(remote_manifest, state)
+    clean = not pending and not differences and not blockers and not stale and remote_state == "in_sync"
+    return {
+        "version": 1,
+        "clean": clean,
+        "remote": {
+            "head": remote_head,
+            "last_sync_commit": state["last_sync_commit"],
+            "state": remote_state,
+            "branch": branch,
+            "mode": "offline" if offline else "online",
+        },
+        "pending": pending,
+        "differences": differences,
+        "pull_blockers": blockers,
+        "stale_local_paths": stale,
+    }
 
 
 def apply_pending_adds(state: dict[str, Any], manifest: dict[str, Any], new_roots: list[dict[str, str]]) -> tuple[list[dict[str, str]], list[str]]:
@@ -801,6 +937,30 @@ def handle_list(_: argparse.Namespace) -> None:
     for entry in roots:
         labels = ", ".join(root_statuses(entry, state, manifest))
         print(f"{token_to_local_path(entry['path'])} [{labels}]")
+
+
+def handle_status(args: argparse.Namespace) -> None:
+    state = ensure_initialized()
+    status = collect_status(state, offline=args.offline)
+
+    if args.json:
+        print(json.dumps(status, indent=2, sort_keys=True))
+        return
+
+    remote_state = str(status["remote"]["state"])
+    remote_messages = ["remote changed since last sync"]
+    if remote_state == "in_sync":
+        remote_messages = ["remote matches last sync commit"]
+    elif remote_state == "empty":
+        remote_messages = ["remote has no commits yet"]
+    print_status_section("remote", remote_messages)
+    print_status_section("pending", status["pending"])
+    print_status_section("remote vs local", status["differences"])
+    print_status_section("pull blockers", status["pull_blockers"])
+    print_status_section("stale local paths", status["stale_local_paths"])
+
+    if status["clean"]:
+        print("clean")
 
 
 def handle_sync_push(_: argparse.Namespace) -> None:
@@ -929,6 +1089,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     list_parser = subparsers.add_parser("list", help="show tracked roots")
     list_parser.set_defaults(handler=handle_list)
+
+    status_parser = subparsers.add_parser("status", help="show remote and local sync differences")
+    status_parser.add_argument("--json", action="store_true", help="print machine-readable status")
+    status_parser.add_argument("--offline", action="store_true", help="use cached remote state without fetch")
+    status_parser.set_defaults(handler=handle_status)
 
     sync_parser = subparsers.add_parser("sync", help="synchronize tracked files")
     sync_subparsers = sync_parser.add_subparsers(dest="sync_command", required=True)

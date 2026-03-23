@@ -41,10 +41,18 @@ From this project directory:
 pipx install .
 ```
 
+This installs both `os-user-conf-sync` and the shorter alias `usrconf`.
+
 Then verify:
 
 ```bash
-os-user-conf-sync --help
+usrconf --help
+```
+
+If you already installed an older version, refresh the entry points with:
+
+```bash
+pipx install --force .
 ```
 
 ## Quick Start
@@ -52,42 +60,45 @@ os-user-conf-sync --help
 Initialize the tool with the git repository that will hold your tracked files:
 
 ```bash
-os-user-conf-sync init <repo-url>
+usrconf init <repo-url>
 ```
 
 Add files under `$HOME`:
 
 ```bash
-os-user-conf-sync add ~/.bashrc
-os-user-conf-sync add ~/.gitconfig
-os-user-conf-sync add -r ~/.config/nvim
-os-user-conf-sync add -r -i ~/.config
+usrconf add ~/.bashrc
+usrconf add ~/.gitconfig
+usrconf add -r ~/.config/nvim
+usrconf add -r -i ~/.config
 ```
 
 See what is currently managed:
 
 ```bash
-os-user-conf-sync list
+usrconf list
+usrconf status
+usrconf status --json
+usrconf status --json --offline
 ```
 
 Push current local versions to the remote repository:
 
 ```bash
-os-user-conf-sync sync push
+usrconf sync push
 ```
 
 On another machine, initialize against the same repository and pull tracked files down:
 
 ```bash
-os-user-conf-sync init <repo-url>
-os-user-conf-sync sync pull
+usrconf init <repo-url>
+usrconf sync pull
 ```
 
 Stop tracking a file:
 
 ```bash
-os-user-conf-sync remove ~/.gitconfig
-os-user-conf-sync sync push
+usrconf remove ~/.gitconfig
+usrconf sync push
 ```
 
 ## Command Reference
@@ -130,8 +141,18 @@ os-user-conf-sync sync push
 
 ### `list`
 
-- shows tracked files and pending local add/remove operations
+- shows tracked roots and pending local add/remove operations
 - also shows basic state like `tracked-file`, `tracked-dir`, `pending-add-file`, `pending-add-dir`, `modified`, `missing`
+
+### `status`
+
+- fetches remote state and compares it with the current local machine
+- shows pending local add/remove operations separately from remote drift
+- reports actionable differences like `modified file`, `missing file`, `missing dir`, `path collision`
+- reports pull blockers using the same checks as `sync pull`
+- reports paths that were previously synced but are no longer managed remotely
+- supports `--json` for machine-readable output with a versioned schema
+- supports `--offline` to use cached remote-tracking refs without running `git fetch`
 
 ### `sync push`
 
@@ -176,12 +197,16 @@ os-user-conf-sync sync pull
 After editing a tracked file on Machine A:
 
 ```bash
+os-user-conf-sync status
 os-user-conf-sync sync push
 ```
 
 Then on Machine B:
 
 ```bash
+os-user-conf-sync status
+os-user-conf-sync status --offline
+os-user-conf-sync status --json --offline
 os-user-conf-sync sync pull
 ```
 
@@ -254,6 +279,7 @@ Example:
 Another machine pushed new state. Run:
 
 ```bash
+os-user-conf-sync status
 os-user-conf-sync sync pull
 ```
 

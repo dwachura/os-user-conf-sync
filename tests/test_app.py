@@ -223,6 +223,154 @@ class OsUserConfSyncTests(unittest.TestCase):
         self.assertIn("no longer managed locally", stdout)
         self.assertTrue((self.home_two / ".config" / "app" / "remove.txt").exists())
 
+    def test_status_reports_clean_state(self) -> None:
+        source_file = self.home_one / ".bashrc"
+        source_file.write_text("export ORIGINAL=1\n")
+
+        self.init_repo(self.env_one)
+        self.assertEqual(run_cli(["add", str(source_file)], self.env_one)[0], 0)
+        self.assertEqual(run_cli(["sync", "push"], self.env_one)[0], 0)
+
+        code, stdout, _ = run_cli(["status"], self.env_one)
+        self.assertEqual(code, 0)
+        self.assertIn("remote matches last sync commit", stdout)
+        self.assertIn("clean", stdout)
+
+        code, stdout, _ = run_cli(["status", "--json"], self.env_one)
+        self.assertEqual(code, 0)
+        payload = json.loads(stdout)
+        self.assertEqual(payload["version"], 1)
+        self.assertTrue(payload["clean"])
+        self.assertEqual(payload["remote"]["state"], "in_sync")
+        self.assertEqual(payload["pending"], [])
+
+    def test_status_reports_remote_and_local_differences(self) -> None:
+        source_file = self.home_one / ".bashrc"
+        source_file.write_text("export ORIGINAL=1\n")
+
+        self.init_repo(self.env_one)
+        self.assertEqual(run_cli(["add", str(source_file)], self.env_one)[0], 0)
+        self.assertEqual(run_cli(["sync", "push"], self.env_one)[0], 0)
+
+        self.init_repo(self.env_two)
+        self.assertEqual(run_cli(["sync", "pull"], self.env_two)[0], 0)
+
+        source_file.write_text("export REMOTE=1\n")
+        self.assertEqual(run_cli(["sync", "push"], self.env_one)[0], 0)
+
+        pulled_file = self.home_two / ".bashrc"
+        pulled_file.write_text("export LOCAL=1\n")
+
+        code, stdout, _ = run_cli(["status"], self.env_two)
+        self.assertEqual(code, 0)
+        self.assertIn("remote changed since last sync", stdout)
+        self.assertIn(f"modified file: {pulled_file}", stdout)
+        self.assertIn("pull blockers:", stdout)
+
+        code, stdout, _ = run_cli(["status", "--json"], self.env_two)
+        self.assertEqual(code, 0)
+        payload = json.loads(stdout)
+        self.assertFalse(payload["clean"])
+        self.assertEqual(payload["remote"]["state"], "changed")
+        self.assertIn(
+            {
+                "kind": "file",
+                "path": str(pulled_file),
+                "status": "modified",
+                "token": "$HOME/.bashrc",
+            },
+            payload["differences"],
+        )
+        self.assertIn(
+            {
+                "kind": "file",
+                "path": str(pulled_file),
+                "status": "modified",
+                "token": "$HOME/.bashrc",
+            },
+            payload["pull_blockers"],
+        )
+
+    def test_status_offline_uses_cached_remote_state(self) -> None:
+        source_file = self.home_one / ".bashrc"
+        source_file.write_text("export ORIGINAL=1\n")
+
+        self.init_repo(self.env_one)
+        self.assertEqual(run_cli(["add", str(source_file)], self.env_one)[0], 0)
+        self.assertEqual(run_cli(["sync", "push"], self.env_one)[0], 0)
+
+        self.init_repo(self.env_two)
+        self.assertEqual(run_cli(["sync", "pull"], self.env_two)[0], 0)
+
+        source_file.write_text("export REMOTE=1\n")
+        self.assertEqual(run_cli(["sync", "push"], self.env_one)[0], 0)
+
+        code, stdout, _ = run_cli(["status", "--offline"], self.env_two)
+        self.assertEqual(code, 0)
+        self.assertIn("remote matches last sync commit", stdout)
+        self.assertIn("clean", stdout)
+
+        code, stdout, _ = run_cli(["status", "--offline", "--json"], self.env_two)
+        self.assertEqual(code, 0)
+        payload = json.loads(stdout)
+        self.assertTrue(payload["clean"])
+        self.assertEqual(payload["remote"]["mode"], "offline")
+        self.assertEqual(payload["remote"]["state"], "in_sync")
+
+    def test_status_reports_pending_and_no_longer_managed_paths(self) -> None:
+        root = self.home_one / ".config" / "app"
+        root.mkdir(parents=True)
+        keep_file = root / "keep.txt"
+        remove_file = root / "remove.txt"
+        keep_file.write_text("keep\n")
+        remove_file.write_text("remove\n")
+
+        self.init_repo(self.env_one)
+        self.assertEqual(run_cli(["add", "-r", str(root)], self.env_one, answers=["y"])[0], 0)
+        self.assertEqual(run_cli(["sync", "push"], self.env_one)[0], 0)
+
+        self.init_repo(self.env_two)
+        self.assertEqual(run_cli(["sync", "pull"], self.env_two)[0], 0)
+
+        code, stdout, _ = run_cli(["add", str(self.home_two / ".gitconfig")], self.env_two)
+        self.assertEqual(code, 1)
+
+        extra_file = self.home_two / ".gitconfig"
+        extra_file.write_text("[user]\nname = Test\n")
+        code, stdout, _ = run_cli(["add", str(extra_file)], self.env_two)
+        self.assertEqual(code, 0)
+
+        remove_file.unlink()
+        self.assertEqual(run_cli(["sync", "push"], self.env_one)[0], 0)
+
+        code, stdout, _ = run_cli(["status"], self.env_two)
+        self.assertEqual(code, 0)
+        self.assertIn(f"pending add file: {extra_file}", stdout)
+        self.assertIn(f"no longer managed remotely: {self.home_two / '.config' / 'app' / 'remove.txt'}", stdout)
+
+        code, stdout, _ = run_cli(["status", "--json"], self.env_two)
+        self.assertEqual(code, 0)
+        payload = json.loads(stdout)
+        self.assertIn(
+            {
+                "action": "add",
+                "kind": "file",
+                "path": str(extra_file),
+                "status": "pending",
+                "token": "$HOME/.gitconfig",
+            },
+            payload["pending"],
+        )
+        self.assertIn(
+            {
+                "kind": "file",
+                "path": str(self.home_two / ".config" / "app" / "remove.txt"),
+                "status": "no_longer_managed",
+                "token": "$HOME/.config/app/remove.txt",
+            },
+            payload["stale_local_paths"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
