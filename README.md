@@ -41,12 +41,12 @@ From this project directory:
 pipx install .
 ```
 
-This installs both `os-user-conf-sync` and the shorter alias `usrconf`.
+This installs both `os-user-conf-sync` and the shorter alias `userconf`.
 
 Then verify:
 
 ```bash
-usrconf --help
+userconf --help
 ```
 
 If you already installed an older version, refresh the entry points with:
@@ -60,45 +60,46 @@ pipx install --force .
 Initialize the tool with the git repository that will hold your tracked files:
 
 ```bash
-usrconf init <repo-url>
+userconf init <repo-url>
 ```
 
 Add files under `$HOME`:
 
 ```bash
-usrconf add ~/.bashrc
-usrconf add ~/.gitconfig
-usrconf add -r ~/.config/nvim
-usrconf add -r -i ~/.config
+userconf add ~/.bashrc
+userconf add ~/.gitconfig
+userconf add -r ~/.config/nvim
+userconf add -r -i ~/.config
 ```
 
 See what is currently managed:
 
 ```bash
-usrconf list
-usrconf status
-usrconf status --json
-usrconf status --json --offline
+userconf dirs
+userconf list
+userconf status
+userconf status --json
+userconf status --json --offline
 ```
 
 Push current local versions to the remote repository:
 
 ```bash
-usrconf sync push
+userconf sync push
 ```
 
 On another machine, initialize against the same repository and pull tracked files down:
 
 ```bash
-usrconf init <repo-url>
-usrconf sync pull
+userconf init <repo-url>
+userconf sync pull
 ```
 
 Stop tracking a file:
 
 ```bash
-usrconf remove ~/.gitconfig
-usrconf sync push
+userconf remove ~/.gitconfig
+userconf sync push
 ```
 
 ## Command Reference
@@ -143,6 +144,11 @@ usrconf sync push
 
 - shows tracked roots and pending local add/remove operations
 - also shows basic state like `tracked-file`, `tracked-dir`, `pending-add-file`, `pending-add-dir`, `modified`, `missing`
+
+### `dirs`
+
+- shows important local paths used by the tool
+- includes home, config root/file, data root, state file, repo cache, and managed repo files directory
 
 ### `status`
 

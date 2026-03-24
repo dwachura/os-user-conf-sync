@@ -22,7 +22,7 @@ classifiers = [
 
 [project.scripts]
 os-user-conf-sync = "os_user_conf_sync.app:main"
-usrconf = "os_user_conf_sync.app:main"
+userconf = "os_user_conf_sync.app:main"
 
 [tool.setuptools]
 include-package-data = false

@@ -939,6 +939,20 @@ def handle_list(_: argparse.Namespace) -> None:
         print(f"{token_to_local_path(entry['path'])} [{labels}]")
 
 
+def handle_dirs(_: argparse.Namespace) -> None:
+    paths = [
+        ("home", Path.home()),
+        ("config-root", config_root()),
+        ("config-file", config_path()),
+        ("data-root", data_root()),
+        ("state-file", state_path()),
+        ("repo-cache", repo_dir()),
+        ("repo-files", repo_dir() / "files"),
+    ]
+    for label, path in paths:
+        print(f"{label}: {path}")
+
+
 def handle_status(args: argparse.Namespace) -> None:
     state = ensure_initialized()
     status = collect_status(state, offline=args.offline)
@@ -1089,6 +1103,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     list_parser = subparsers.add_parser("list", help="show tracked roots")
     list_parser.set_defaults(handler=handle_list)
+
+    dirs_parser = subparsers.add_parser("dirs", help="show important local paths")
+    dirs_parser.set_defaults(handler=handle_dirs)
 
     status_parser = subparsers.add_parser("status", help="show remote and local sync differences")
     status_parser.add_argument("--json", action="store_true", help="print machine-readable status")

@@ -12,7 +12,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
-from os_user_conf_sync.app import config_path, load_state, main, token_to_local_path
+from os_user_conf_sync.app import config_path, data_root, load_state, main, repo_dir, state_path, token_to_local_path
 
 
 def run_cli(
@@ -94,6 +94,19 @@ class OsUserConfSyncTests(unittest.TestCase):
             state = load_state()
             self.assertEqual(state["pending_adds"], [{"kind": "file", "path": "$HOME/.bashrc"}])
             self.assertEqual(token_to_local_path("$HOME/.bashrc"), bashrc)
+
+    def test_dirs_lists_important_paths(self) -> None:
+        code, stdout, _ = run_cli(["dirs"], self.env_one)
+        self.assertEqual(code, 0)
+
+        with patch.dict(os.environ, self.env_one, clear=False):
+            self.assertIn(f"home: {self.home_one}", stdout)
+            self.assertIn(f"config-root: {self.config_one / 'os-user-conf-sync'}", stdout)
+            self.assertIn(f"config-file: {config_path()}", stdout)
+            self.assertIn(f"data-root: {data_root()}", stdout)
+            self.assertIn(f"state-file: {state_path()}", stdout)
+            self.assertIn(f"repo-cache: {repo_dir()}", stdout)
+            self.assertIn(f"repo-files: {repo_dir() / 'files'}", stdout)
 
     def test_directory_requires_recursive_flag(self) -> None:
         config_dir = self.home_one / ".config" / "app"
